@@ -114,4 +114,20 @@ T["debounce"]["function is only called once"] = function()
     eq(called, { 4, 9 })
 end
 
+T["debounce"]["character_to_byte_col handles mixed multibyte utf-16 offsets"] = function()
+    child.g.test_line = "é界🙂z"
+    local cols = child.lua_func(function()
+        local util = require("copilot-lsp.util")
+        return {
+            util.character_to_byte_col(vim.g.test_line, 0),
+            util.character_to_byte_col(vim.g.test_line, 1),
+            util.character_to_byte_col(vim.g.test_line, 2),
+            util.character_to_byte_col(vim.g.test_line, 4),
+            util.character_to_byte_col(vim.g.test_line, 5),
+        }
+    end)
+
+    eq(cols, { 0, 2, 5, 9, 10 })
+end
+
 return T

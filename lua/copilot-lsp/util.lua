@@ -1,4 +1,16 @@
 local M = {}
+
+---@param line string
+---@param character integer
+---@return integer
+function M.character_to_byte_col(line, character)
+    if character <= 0 or line == "" then
+        return 0
+    end
+    local max_character = vim.str_utfindex(line, "utf-16")
+    return vim.str_byteindex(line, "utf-16", math.min(character, max_character), false)
+end
+
 ---@param edit copilotlsp.InlineEdit
 function M.apply_inline_edit(edit)
     local bufnr = M.is_named_buffer(edit.textDocument.uri) and vim.uri_to_bufnr(edit.textDocument.uri)
@@ -114,17 +126,17 @@ end
 function M.hl_text_to_virt_lines(text, lang)
     local lines = vim.split(text, "\n")
     local normal_hl = "Normal"
-    local bg_hl = "CopilotLspNesAdd"
+    local preview_hl = "CopilotLspNesPreview"
 
     local function hl_chunk(chunk, hl)
         if not hl then
-            return { chunk, { normal_hl, bg_hl } }
+            return { chunk, { preview_hl, normal_hl } }
         end
         if type(hl) == "string" then
-            return { chunk, { hl, bg_hl } }
+            return { chunk, { preview_hl, hl } }
         end
         hl = vim.deepcopy(hl)
-        table.insert(hl, bg_hl)
+        table.insert(hl, 1, preview_hl)
         return { chunk, hl }
     end
 
@@ -212,6 +224,8 @@ function M.set_hl()
     vim.api.nvim_set_hl(0, "CopilotLspNesAdd", { link = "DiffAdd", default = true })
     vim.api.nvim_set_hl(0, "CopilotLspNesDelete", { link = "DiffDelete", default = true })
     vim.api.nvim_set_hl(0, "CopilotLspNesApply", { link = "DiffText", default = true })
+    vim.api.nvim_set_hl(0, "CopilotLspNesContext", { link = "Comment", default = true })
+    vim.api.nvim_set_hl(0, "CopilotLspNesPreview", { link = "CursorLine", default = true })
 end
 
 --- check if buffer uri is a named buffer

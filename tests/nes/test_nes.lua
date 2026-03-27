@@ -1,8 +1,4 @@
 local eq = MiniTest.expect.equality
-local ref = function(screenshot)
-    -- ignore the last, 24th line on the screen as it has differing `screenattr` values between stable and nightly
-    MiniTest.expect.reference_screenshot(screenshot, nil, { ignore_attr = { 24 } })
-end
 
 local child = MiniTest.new_child_neovim()
 
@@ -12,6 +8,10 @@ T["nes"] = MiniTest.new_set({
         pre_case = function()
             child.restart({ "-u", "scripts/minimal_init.lua" })
             child.lua_func(function()
+                package.loaded["codediff.diff"] = nil
+                package.preload["codediff.diff"] = function()
+                    error("codediff unavailable")
+                end
                 vim.g.copilot_nes_debounce = 450
                 vim.lsp.config("copilot_ls", {
                     cmd = require("tests.mock_lsp").server,
@@ -29,6 +29,10 @@ local function request_nes()
         require("copilot-lsp.nes").request_nes(copilot)
     end)
     vim.uv.sleep(500)
+end
+
+local function preview_hls(hl)
+    return { "CopilotLspNesPreview", hl }
 end
 
 local function get_content()
@@ -64,13 +68,30 @@ local function wait_for_active_nes(bufnr, should_exist)
     end, bufnr or child.api.nvim_get_current_buf(), should_exist)
 end
 
+local function extmarks()
+    return child.lua_func(function()
+        local ns_id = vim.b[0].copilotlsp_nes_namespace_id
+        return vim.api.nvim_buf_get_extmarks(0, ns_id, 0, -1, { details = true })
+    end)
+end
+
+local function find_mark(marks, key, value)
+    for _, mark in ipairs(marks) do
+        if mark[4][key] ~= nil and (value == nil or mark[4][key] == value) then
+            return mark
+        end
+    end
+end
+
+local function buffer_lines()
+    return child.api.nvim_buf_get_lines(0, 0, -1, false)
+end
+
 T["nes"]["lsp starts"] = function()
     child.cmd("edit tests/fixtures/sameline_edit.txt")
     local lsp_count = child.lua_func(function()
         local count = 0
-        local clients = vim.lsp.get_clients()
-        for _, _ in pairs(clients) do
-            --NOTE: #clients doesn't work, so we count in the loop
+        for _, _ in pairs(vim.lsp.get_clients()) do
             count = count + 1
         end
         return count
@@ -297,138 +318,177 @@ T["nes"]["restore_last_nes is scoped per buffer"] = function()
     eq(restored, true)
 end
 
-T["nes"]["same line edit"] = function()
+T["nes"]["same line request renders virtual preview and applies edit"] = function()
     child.cmd("edit tests/fixtures/sameline_edit.txt")
-    ref(child.get_screenshot())
-    vim.uv.sleep(500)
-    child.lua_func(function()
-        local copilot = vim.lsp.get_clients()[1]
-        require("copilot-lsp.nes").request_nes(copilot)
-    end)
-    vim.uv.sleep(500)
-    ref(child.get_screenshot())
-    child.lua_func(function()
-        local _ = require("copilot-lsp.nes").apply_pending_nes() and require("copilot-lsp.nes").walk_cursor_end_edit()
-    end)
-    ref(child.get_screenshot())
-end
+    request_nes()
 
-T["nes"]["multi line edit"] = function()
-    child.cmd("edit tests/fixtures/multiline_edit.txt")
-    ref(child.get_screenshot())
-    vim.uv.sleep(500)
-    child.lua_func(function()
-        local copilot = vim.lsp.get_clients()[1]
-        require("copilot-lsp.nes").request_nes(copilot)
-    end)
-    vim.uv.sleep(500)
-    ref(child.get_screenshot())
-    child.lua_func(function()
-        local _ = require("copilot-lsp.nes").apply_pending_nes() and require("copilot-lsp.nes").walk_cursor_end_edit()
-    end)
-    ref(child.get_screenshot())
-end
+    local marks = extmarks()
+    local delete_mark = find_mark(marks, "hl_group", "CopilotLspNesDelete")
+    local preview_mark = find_mark(marks, "virt_lines")
 
-T["nes"]["removal edit"] = function()
-    child.cmd("edit tests/fixtures/removal_edit.txt")
-    ref(child.get_screenshot())
-    vim.uv.sleep(500)
-    child.lua_func(function()
-        local copilot = vim.lsp.get_clients()[1]
-        require("copilot-lsp.nes").request_nes(copilot)
-    end)
-    vim.uv.sleep(500)
-    ref(child.get_screenshot())
-    child.lua_func(function()
-        require("copilot-lsp.nes").walk_cursor_start_edit()
-    end)
-    ref(child.get_screenshot())
-    child.lua_func(function()
-        local _ = require("copilot-lsp.nes").apply_pending_nes() and require("copilot-lsp.nes").walk_cursor_end_edit()
-    end)
-    ref(child.get_screenshot())
-end
+    eq(find_mark(marks, "virt_text"), nil)
+    eq({ delete_mark[2], delete_mark[3], delete_mark[4].end_col }, { 0, 0, 3 })
+    eq(preview_mark[4].virt_lines, {
+        {
+            { "xyz", preview_hls("CopilotLspNesAdd") },
+        },
+    })
 
-T["nes"]["add only edit"] = function()
-    child.cmd("edit tests/fixtures/addonly_edit.txt")
-    ref(child.get_screenshot())
-    vim.uv.sleep(500)
     child.lua_func(function()
-        local copilot = vim.lsp.get_clients()[1]
-        require("copilot-lsp.nes").request_nes(copilot)
-    end)
-    vim.uv.sleep(500)
-    ref(child.get_screenshot())
-    child.lua_func(function()
-        require("copilot-lsp.nes").walk_cursor_start_edit()
+        require("copilot-lsp.nes").apply_pending_nes()
     end)
     vim.uv.sleep(100)
-    ref(child.get_screenshot())
-    child.lua_func(function()
-        local _ = require("copilot-lsp.nes").apply_pending_nes() and require("copilot-lsp.nes").walk_cursor_end_edit()
-    end)
-    ref(child.get_screenshot())
+
+    eq(buffer_lines(), { "xyz", "bbb", "ccc" })
 end
 
-T["nes"]["highlights replacement"] = function()
+T["nes"]["multiline request still applies through transport edit"] = function()
+    child.cmd("edit tests/fixtures/multiline_edit.txt")
+    request_nes()
+
+    child.lua_func(function()
+        require("copilot-lsp.nes").apply_pending_nes()
+    end)
+    vim.uv.sleep(100)
+
+    eq(buffer_lines(), { "new line one", "new line two", "line three" })
+end
+
+T["nes"]["removal request still applies through transport edit"] = function()
+    child.cmd("edit tests/fixtures/removal_edit.txt")
+    request_nes()
+
+    child.lua_func(function()
+        require("copilot-lsp.nes").apply_pending_nes()
+    end)
+    vim.uv.sleep(100)
+
+    eq(buffer_lines(), { "line one", "line three" })
+end
+
+T["nes"]["add-only request still applies through transport edit"] = function()
+    child.cmd("edit tests/fixtures/addonly_edit.txt")
+    request_nes()
+
+    child.lua_func(function()
+        require("copilot-lsp.nes").apply_pending_nes()
+    end)
+    vim.uv.sleep(100)
+
+    eq(buffer_lines(), { "1 line", "2 line", "line 3", "4 line" })
+end
+
+T["nes"]["highlight replacement request uses inline diff preview"] = function()
     child.cmd("edit tests/fixtures/highlight_test.c")
+    request_nes()
+
+    local marks = extmarks()
+    local delete_mark = find_mark(marks, "hl_group", "CopilotLspNesDelete")
+    local preview_mark = find_mark(marks, "virt_lines")
+
+    eq(find_mark(marks, "virt_text"), nil)
+    eq(delete_mark ~= nil, true)
+    eq(preview_mark[4].virt_lines, {
+        {
+            { [[  printf("]], preview_hls("CopilotLspNesContext") },
+            { [[Goodb]], preview_hls("CopilotLspNesAdd") },
+            { [[, %s!\n", name);]], preview_hls("CopilotLspNesContext") },
+        },
+    })
+end
+
+T["nes"]["apply ignores preview artifacts and uses original edit"] = function()
     child.lua_func(function()
-        vim.cmd([[colorscheme vim]])
-        vim.treesitter.start(0)
-        vim.cmd([[hi! CopilotLspNesAdd guifg=NONE guibg=NONE]])
-        vim.cmd([[hi! CopilotLspNesDelete guifg=NONE guibg=NONE]])
+        vim.api.nvim_buf_set_lines(0, 0, -1, false, { "abcdef" })
+        local ns_id = vim.api.nvim_create_namespace("nes_test_apply")
+        local ui = require("copilot-lsp.nes.ui")
+        local original_calculate_preview = ui._calculate_preview
+        ui._calculate_preview = function()
+            return {
+                inline_diff = {
+                    line = 0,
+                    old_line = "abcdef",
+                    new_line = "WRONG PREVIEW",
+                    old_ranges = {
+                        { start_col = 0, end_col = 6 },
+                    },
+                    new_ranges = {
+                        { start_col = 0, end_col = 13 },
+                    },
+                },
+            }
+        end
+
+        local edit = {
+            command = { title = "mock", command = "mock" },
+            range = {
+                start = { line = 0, character = 2 },
+                ["end"] = { line = 0, character = 4 },
+            },
+            textDocument = { uri = vim.uri_from_fname("/") },
+            newText = "ZZ",
+            text = "ZZ",
+        }
+
+        ui._display_next_suggestion(0, ns_id, { edit })
+        require("copilot-lsp.nes").apply_pending_nes(0)
+        ui._calculate_preview = original_calculate_preview
     end)
-    ref(child.get_screenshot())
-    vim.uv.sleep(500)
+
+    vim.uv.sleep(100)
+    eq(buffer_lines(), { "abZZef" })
+end
+
+T["nes"]["walk_cursor_start_edit converts utf-16 columns on unnamed buffers"] = function()
     child.lua_func(function()
-        local copilot = vim.lsp.get_clients()[1]
-        require("copilot-lsp.nes").request_nes(copilot)
+        vim.api.nvim_buf_set_lines(0, 0, -1, false, { "line one", "a🙂b" })
+        vim.b[0].nes_state = {
+            command = { title = "mock", command = "mock" },
+            range = {
+                start = { line = 1, character = 3 },
+                ["end"] = { line = 1, character = 4 },
+            },
+            textDocument = { uri = vim.uri_from_fname("/") },
+            newText = "X",
+            text = "X",
+        }
+        vim.api.nvim_win_set_cursor(0, { 1, 0 })
+        require("copilot-lsp.nes").walk_cursor_start_edit(0)
     end)
-    vim.uv.sleep(500)
-    ref(child.get_screenshot())
+
+    vim.uv.sleep(100)
+    eq(child.api.nvim_win_get_cursor(0), { 2, 5 })
+end
+
+T["nes"]["walk_cursor_end_edit converts utf-16 columns on unnamed buffers"] = function()
     child.lua_func(function()
-        local _ = require("copilot-lsp.nes").apply_pending_nes() and require("copilot-lsp.nes").walk_cursor_end_edit()
+        vim.api.nvim_buf_set_lines(0, 0, -1, false, { "line one", "a🙂b" })
+        vim.b[0].nes_state = {
+            command = { title = "mock", command = "mock" },
+            range = {
+                start = { line = 1, character = 1 },
+                ["end"] = { line = 1, character = 3 },
+            },
+            textDocument = { uri = vim.uri_from_fname("/") },
+            newText = "X",
+            text = "X",
+        }
+        vim.api.nvim_win_set_cursor(0, { 1, 0 })
+        require("copilot-lsp.nes").walk_cursor_end_edit(0)
     end)
-    ref(child.get_screenshot())
+
+    vim.uv.sleep(100)
+    eq(child.api.nvim_win_get_cursor(0), { 2, 5 })
 end
 
 T["nes"]["apply_pending_nes on empty buffer"] = function()
+    request_nes()
     child.lua_func(function()
-        local copilot = vim.lsp.get_clients()[1]
-        require("copilot-lsp.nes").request_nes(copilot)
+        require("copilot-lsp.nes").apply_pending_nes()
     end)
-    vim.uv.sleep(500)
-    child.lua_func(function()
-        local _ = require("copilot-lsp.nes").apply_pending_nes()
-    end)
-    vim.uv.sleep(500)
-    ref(child.get_screenshot())
-end
+    vim.uv.sleep(100)
 
-T["nes"]["walk_cursor_end_edit on empty buffer"] = function()
-    child.lua_func(function()
-        local copilot = vim.lsp.get_clients()[1]
-        require("copilot-lsp.nes").request_nes(copilot)
-    end)
-    vim.uv.sleep(500)
-    child.lua_func(function()
-        local _ = require("copilot-lsp.nes").apply_pending_nes() and require("copilot-lsp.nes").walk_cursor_end_edit()
-    end)
-    vim.uv.sleep(500)
-    ref(child.get_screenshot())
-end
-
-T["nes"]["walk_cursor_start_edit on empty buffer"] = function()
-    child.lua_func(function()
-        local copilot = vim.lsp.get_clients()[1]
-        require("copilot-lsp.nes").request_nes(copilot)
-    end)
-    vim.uv.sleep(500)
-    child.lua_func(function()
-        local _ = require("copilot-lsp.nes").apply_pending_nes() and require("copilot-lsp.nes").walk_cursor_start_edit()
-    end)
-    vim.uv.sleep(500)
-    ref(child.get_screenshot())
+    eq(buffer_lines(), { "new line one", "new line two" })
 end
 
 return T

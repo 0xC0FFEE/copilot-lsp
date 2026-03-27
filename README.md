@@ -42,7 +42,7 @@ return {
             end
 
             -- optionally: try to re-show the most recent NES suggestion for this buffer
-            if nes.restore_last_nes(bufnr) then
+            if require("copilot-lsp.nes").restore_last_nes(bufnr) then
                 return nil
             end
 
@@ -123,6 +123,10 @@ Just add the completion source to your Blink configuration and it will integrate
 # Requirements
 
 - Copilot LSP installed via Mason or system and on PATH
+- Optional but recommended for the highest-fidelity same-line NES previews:
+  `codediff.nvim` (provides the public `codediff.diff` API backed by
+  `libvscode-diff`). If it is unavailable, copilot-lsp falls back to
+  canonical same-line highlighting.
 
 ### Screenshots
 

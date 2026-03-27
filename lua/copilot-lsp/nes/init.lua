@@ -113,6 +113,14 @@ local function clear_pending_nes(bufnr)
     nes_ui.clear_suggestion(bufnr, get_nes_ns(bufnr), false)
 end
 
+---@param line integer
+---@param character integer
+---@return integer
+local function _buffer_character_to_byte_col(bufnr, line, character)
+    local line_text = vim.api.nvim_buf_get_lines(bufnr, line, line + 1, false)[1] or ""
+    return utils.character_to_byte_col(line_text, character)
+end
+
 ---@param err lsp.ResponseError?
 ---@param result copilotlsp.copilotInlineEditResponse
 ---@param ctx lsp.HandlerContext
@@ -201,7 +209,8 @@ function M.walk_cursor_start_edit(bufnr)
     if cursor_row - 1 ~= state.range.start.line then
         vim.b[bufnr].nes_jump = true
         -- Since we are async, we check to see if the buffer has changed
-        if vim.api.nvim_get_current_buf() ~= vim.uri_to_bufnr(state.textDocument.uri) then
+        local expected_buf = utils.is_named_buffer(state.textDocument.uri) and vim.uri_to_bufnr(state.textDocument.uri) or bufnr
+        if vim.api.nvim_get_current_buf() ~= expected_buf then
             return false
         end
 
@@ -218,7 +227,10 @@ function M.walk_cursor_start_edit(bufnr)
             if utils.is_named_buffer(state.textDocument.uri) then
                 vim.lsp.util.show_document(jump_loc_before, "utf-16", { focus = true })
             else
-                vim.api.nvim_win_set_cursor(0, { state.range.start.line + 1, state.range.start.character })
+                vim.api.nvim_win_set_cursor(0, {
+                    state.range.start.line + 1,
+                    _buffer_character_to_byte_col(bufnr, state.range.start.line, state.range.start.character),
+                })
             end
         end)
         return true
@@ -257,7 +269,10 @@ function M.walk_cursor_end_edit(bufnr)
         if utils.is_named_buffer(state.textDocument.uri) then
             pcall(vim.lsp.util.show_document, jump_loc_after, "utf-16", { focus = true })
         else
-            pcall(vim.api.nvim_win_set_cursor, 0, { state.range["end"].line + 1, state.range["end"].character })
+            pcall(vim.api.nvim_win_set_cursor, 0, {
+                state.range["end"].line + 1,
+                _buffer_character_to_byte_col(bufnr, state.range["end"].line, state.range["end"].character),
+            })
         end
     end)
     return true
